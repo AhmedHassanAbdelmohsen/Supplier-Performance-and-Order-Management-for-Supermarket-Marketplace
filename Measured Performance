@@ -1,0 +1,112 @@
+SELECT sp.`agent` `Supplier Agent`,
+       sp.`city_l1` `Supplier City L1`,
+       sp.`region_l2` `Supplier Region L2`,
+       sp.`group_id` `Supplier Group ID`,
+       sp.`supplier_name` `Supplier Group`,
+       sp.`branch_id` `Branch ID`,
+       sp.`branch` `Branch`,
+       mp.`category` `Product Category`,
+       sp.`VPN` `Vendor Product Number`,
+       sp.`order_type` `Order Type`,
+
+       ## Supplier Score Calculation - Calculate percentage score based on total points
+       ROUND((
+         ( (CASE WHEN SUM(sp.`dispatched_order`) / COUNT(DISTINCT CASE WHEN sp.`accepted_order` = 1 THEN sp.`order_reference` END) >= 0.85 THEN 20
+                 WHEN SUM(sp.`dispatched_order`) / COUNT(DISTINCT CASE WHEN sp.`accepted_order` = 1 THEN sp.`order_reference` END) >= 0.75 
+                      AND SUM(sp.`dispatched_order`) / COUNT(DISTINCT CASE WHEN sp.`accepted_order` = 1 THEN sp.`order_reference` END) < 0.85 THEN 10
+                 ELSE 0 
+                 END) + 
+
+           (CASE WHEN SUM(sp.`cancelled_after_accepted`) / SUM(sp.`accepted_order`) <= 0.05 THEN 20
+                 WHEN SUM(sp.`cancelled_after_accepted`) / SUM(sp.`accepted_order`) <= 0.1 
+                      AND SUM(sp.`cancelled_after_accepted`) / SUM(sp.`accepted_order`) > 0.05 THEN 10
+                 ELSE 0 
+                 END) +
+
+           (CASE WHEN SUM(sp.`scanned_and_pending_order`) / SUM(sp.`dispatched_order`) <= 0.05 THEN 20
+                 WHEN SUM(sp.`scanned_and_pending_order`) / SUM(sp.`dispatched_order`) <= 0.1 
+                      AND SUM(sp.`scanned_and_pending_order`) / SUM(sp.`dispatched_order`) > 0.05 THEN 10
+                 ELSE 0 
+                 END) +
+
+           (CASE WHEN SUM(sp.`withdrawn_order`) / COUNT(DISTINCT sp.`order_reference`) <= 0.05 THEN 20
+                 WHEN SUM(sp.`withdrawn_order`) / COUNT(DISTINCT sp.`order_reference`) <= 0.1 
+                      AND SUM(sp.`withdrawn_order`) / COUNT(DISTINCT sp.`order_reference`) > 0.05 THEN 10
+                 ELSE 0 
+                 END) +
+
+           ((CASE WHEN SUM(sp.`fresh_orders_within_sla`) / SUM(CASE WHEN sp.`order_type` = 'Fresh' THEN sp.`dispatched_order` ELSE 0.0 END) >= 0.8 THEN 20 
+                  ELSE 0 
+                  END) + 
+            (CASE WHEN SUM(sp.`grocery_orders_within_sla`) / SUM(CASE WHEN sp.`order_type` = 'Grocery' THEN sp.`dispatched_order` ELSE 0.0 END) >= 0.8 THEN 20 
+                  ELSE 0 
+                  END))
+         ) / 100 * 100, 2) `Supplier Score Percentage`,
+
+       ## Metrics Used in Supplier Score Calculations
+       (SUM(sp.`dispatched_order`) / COUNT(DISTINCT CASE WHEN sp.`accepted_order` = 1 THEN sp.`order_reference` END)) `Dispatch Rate`,
+       SUM(sp.`cancelled_after_accepted`) `Total Orders Cancelled After Acceptance`,
+       SUM(sp.`scanned_and_pending_order`) `Total 'Scanned & Pending' Orders`,
+       SUM(sp.`withdrawn_order`) `Total Withdrawn Orders`,
+       
+       (SUM(sp.`fresh_orders_within_sla`) / SUM(CASE WHEN sp.`order_type` = 'Fresh' THEN sp.`dispatched_order` ELSE 0.0 END)) `% Fresh Orders - SLA 90`,
+       (SUM(sp.`grocery_orders_within_sla`) / SUM(CASE WHEN sp.`order_type` = 'Grocery' THEN sp.`dispatched_order` ELSE 0.0 END)) `% Grocery Orders - SLA 160`,
+
+       ## Additional Supplier Metrics
+       COUNT(DISTINCT sp.`order_reference`) `Total Orders`,
+       COUNT(DISTINCT CASE WHEN sp.`accepted_order` = 1 THEN sp.`order_reference` END) `Total Accepted Orders`,
+       ((COUNT(DISTINCT CASE WHEN sp.`accepted_order` = 1 THEN sp.`order_reference` END)) / COUNT(DISTINCT sp.`order_reference`)) `Acceptance Rate`,
+       SUM(sp.`dispatched_order`) `Total Dispatched Orders`,
+       SUM(sp.`cancelled_after_dispatched`) `Total Orders Cancelled After Dispatch`,
+       SUM(sp.`not_scanned`) `Total 'Not Scanned' Orders`,
+       SUM(sp.`scanned`) `Total Scanned Orders`,
+       SUM(sp.`delivered_order`) `Total Delivered Orders`,
+       SUM(sp.`reported_problem_order`) `Total 'Reported Problem' Orders`,
+       AVG(sp.`time_to_accept`) `AVG Time To Accept`,
+       AVG(sp.`time_to_dispatch`) `AVG Time To Dispatch`,
+       AVG(sp.`time_to_deliver`) `AVG Time To Deliver - From Assignment`
+
+FROM (SELECT sp.`id`, 
+             sp.`order_number`, 
+             sp.`order_reference`, 
+             sp.`order_type`, 
+             sp.`city_l1`, 
+             sp.`region_l2`, 
+             sp.`group_id`, 
+             sp.`supplier_name`, 
+             sp.`branch_id`, 
+             sp.`branch`, 
+             sp.`class`, 
+             sp.`VPN`, 
+             sp.`agent`, 
+             sp.`accepted_order`, 
+             sp.`dispatched_order`,
+             sp.`cancelled_after_accepted`,
+             sp.`cancelled_after_dispatched`, 
+             sp.`not_scanned`, 
+             sp.`scanned`, 
+             sp.`delivered_order`, 
+             sp.`reported_problem_order`, 
+             sp.`scanned_and_pending_order`, 
+             sp.`withdrawn_order`, 
+             sp.`time_to_accept`, 
+             sp.`time_to_dispatch`, 
+             sp.`time_to_deliver`, 
+             sp.`fresh_orders_within_sla`,
+             sp.`grocery_orders_within_sla`
+      FROM `supplier_performance` sp
+     ) sp
+     
+LEFT JOIN `marketplace_portal_providers` mp ON sp.`branch_id` = mp.`branch_id`
+
+WHERE {{agent}} 
+  AND {{city_l1}} 
+  AND {{region_l2}} 
+  AND {{order_type}} 
+  AND {{category}} 
+  AND {{VPN}} 
+  AND {{group_id}} 
+  AND {{branch_id}} 
+  AND {{date}}
+
+GROUP BY sp.`agent`, sp.`city_l1`, sp.`region_l2`, sp.`supplier_name`, sp.`group_id`;
